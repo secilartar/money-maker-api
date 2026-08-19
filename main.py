@@ -84,7 +84,7 @@ def analiz_et(hisse: str = Query("BRSAN")):
     guncel_kur = get_current_usd_try()
 
     # Profesyonel Kıdemli Analist ve EDT Promptu
-    sistem_istemi = f"""
+    sistem_istemi = rf"""
     Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
     Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir. 
     Sana vereceğim otomatik oluşturulmuş fiyat grafiği görüntüsünü inceleyerek şu adımları harfiyen yerine getir:
