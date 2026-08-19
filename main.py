@@ -3,7 +3,7 @@ import io
 import base64
 import json
 import urllib.request
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from PIL import Image
@@ -42,6 +42,7 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     # Dışarıdan izinsiz botların istek atmasını engeller
     if not API_SECRET_KEY or x_api_key != API_SECRET_KEY:
         raise HTTPException(status_code=403, detail="Erişim reddedildi. Geçersiz API anahtarı.")    hisse_kodu = hisse.upper()
+        
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
         
