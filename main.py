@@ -89,14 +89,20 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
 
     guncel_kur = get_current_usd_try()
 
+    # Python üzerinden en son güncel kapanış fiyatını net olarak alalım
+    guncel_fiyat_tl = float(df['Close'].iloc[-1])
+    guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
+
     # Profesyonel Kıdemli Analist ve EDT Promptu
     sistem_istemi = rf"""
     Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
     Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir. 
-    Sana vereceğim otomatik oluşturulmuş fiyat grafiği görüntüsünü inceleyerek şu adımları harfiyen yerine getir:
+    İncelediğin **{hisse_kodu}** hissesinin Python tarafından bizzat doğrulanan anlık güncel fiyatı: **{guncel_fiyat_tl:.2f} TL** (yaklaşık **${guncel_fiyat_usd:.2f} USD**) kadardır. Analizini ve fiyat hedeflerini MUTLAKA bu gerçek güncel fiyatı baz alarak yap.
+
+    Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat verisini birlikte değerlendirerek şu adımları harfiyen yerine getir:
 
     1. Grafikteki majör dalgaları (1-2-3-4-5) veya düzeltme dalgalarını (A-B-C) detaylıca tespit et.
-    2. Tespit ettiğin fiyat seviyelerini (tepe, dip, kırılım) hem DOLAR (USD) hem de yukarıda verilen canlı kur ({guncel_kur:.2f} TL) üzerinden LİRA (TL) cinsinden parantez içinde belirt.
+    2. Tespit ettiğin fiyat seviyelerini hem DOLAR (USD) hem de canlı kur ({guncel_kur:.2f} TL) üzerinden LİRA (TL) cinsinden parantez içinde belirt.
     3. Grafikteki fiyatlara göre hem USD hem TL uyumlu ASCII dalga şemasını mutlaka çiz:
     
     [Fiyat USD / TL] Eski Zirve           [Fiyat USD / TL] Çift Tepe / Wave B Testi
@@ -110,7 +116,15 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
                        [Fiyat USD / TL] Dip
 
     4. Grafikteki mevcut durumu, hacim uyumunu ve hareketli ortalamaları (MA5, MA22, MA50) değerlendirerek ne zaman düzeltmeye/yükselişe geçeceğini olasılık yüzdeleri vererek her iki para birimi bazında açıkla.
-    5. Olası dip, tepe, tetiklenme ve ana hedef seviyelerini hem USD hem TL içeren temiz bir Markdown tablosu halinde sun.
+    5. **ÖNEMLİ:** Kesinlikle karmaşık Markdown tabloları KULLANMA. Aşağıdaki formatı birebir takip ederek temiz, alt alta maddeler halinde "SEVİYE VE HEDEF LİSTESİ" sun:
+
+    - **Stop-Loss / Stop Seviyesi:** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Kritik Destek (Ana Taban):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Ara Destek (Tetiklenme):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Mevcut Fiyat:** ${guncel_fiyat_usd:.2f} USD ({guncel_fiyat_tl:.2f} TL) - Anlık Grafik Fiyatı
+    - **İlk Ara Direnç:** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Ana Hedef (Wave 5 Target):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Tarihi Majör Direnç:** $X.XX USD (XXX TL) - Açıklama metni...
     """
 
     try:
