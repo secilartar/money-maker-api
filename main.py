@@ -37,8 +37,11 @@ def get_current_usd_try():
         return 48.00
 
 @app.get("/analiz")
-def analiz_et(hisse: str = Query("BRSAN")):
-    hisse_kodu = hisse.upper()
+def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
+    # --- GÜVENLİK KONTROLÜ ---
+    # Dışarıdan izinsiz botların istek atmasını engeller
+    if not API_SECRET_KEY or x_api_key != API_SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Erişim reddedildi. Geçersiz API anahtarı.")    hisse_kodu = hisse.upper()
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
         
