@@ -23,6 +23,7 @@ app.add_middleware(
 )
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
+API_SECRET_KEY = os.environ.get("API_SECRET_KEY")  # 1. Burayı ekle
 client = genai.Client(api_key=API_KEY)
 
 def get_current_usd_try():
@@ -39,10 +40,11 @@ def get_current_usd_try():
 @app.get("/analiz")
 def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     # --- GÜVENLİK KONTROLÜ ---
-    # Dışarıdan izinsiz botların istek atmasını engeller
     if not API_SECRET_KEY or x_api_key != API_SECRET_KEY:
-        raise HTTPException(status_code=403, detail="Erişim reddedildi. Geçersiz API anahtarı.")    hisse_kodu = hisse.upper()
-        
+        raise HTTPException(status_code=403, detail="Erişim reddedildi. Geçersiz API anahtarı.")
+    
+    # 2. Bu kısmı alt satıra indir
+    hisse_kodu = hisse.upper()
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
         
