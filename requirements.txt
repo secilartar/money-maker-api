@@ -1,5 +1,8 @@
 fastapi
 uvicorn
+google-genai
 yfinance
-pandas
 matplotlib
+mplfinance
+pandas
+pillow
