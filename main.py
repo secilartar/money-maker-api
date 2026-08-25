@@ -3,6 +3,7 @@ import io
 import base64
 import json
 import urllib.request
+import threading
 from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
@@ -11,16 +12,16 @@ import yfinance as yf
 import mplfinance as mpf
 import pandas as pd
 from cachetools import TTLCache
-import threading
+import matplotlib
+matplotlib.use('Agg')          # Önemli
+import matplotlib.pyplot as plt
 
-# 12 saat = 43200 saniye
-# maxsize=50 → aynı anda en fazla 50 hisse cache’lensin (bellek için)
+# 12 saatlik cache
 chart_cache = TTLCache(maxsize=50, ttl=43200)
 cache_lock = threading.Lock()
 
 app = FastAPI()
 
-# Frontend ile CORS problemi yaşamamak için
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,11 +31,10 @@ app.add_middleware(
 )
 
 API_KEY = os.environ.get("GEMINI_API_KEY")
-API_SECRET_KEY = os.environ.get("API_SECRET_KEY")  # 1. Burayı ekle
+API_SECRET_KEY = os.environ.get("API_SECRET_KEY")
 client = genai.Client(api_key=API_KEY)
 
 def get_current_usd_try():
-    """Anlık USD/TRY kurunu çeker."""
     try:
         url = "https://open.er-api.com/v6/latest/USD"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -46,19 +46,19 @@ def get_current_usd_try():
 
 @app.get("/analiz")
 def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
-    # --- GÜVENLİK KONTROLÜ ---
     if not API_SECRET_KEY or x_api_key != API_SECRET_KEY:
         raise HTTPException(status_code=403, detail="Erişim reddedildi. Geçersiz API anahtarı.")
     
-    # 2. Bu kısmı alt satıra indir
     hisse_kodu = hisse.upper()
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
-    # --- CACHE KONTROLÜ ---
+
+    # Cache kontrolü
     with cache_lock:
         if hisse_kodu in chart_cache:
-            return chart_cache[hisse_kodu]    
-    # 1. Yahoo Finance üzerinden haftalık verileri çekme
+            return chart_cache[hisse_kodu]
+
+    # Veri çekme
     df = yf.download(hisse_kodu, period="3y", interval="1wk", progress=False)
     if df.empty:
         return {"image": None, "rapor": f"HATA: '{hisse_kodu}' için veri bulunamadı! Sembolü kontrol edin."}
@@ -66,7 +66,6 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Hareketli Ortalama (MA) İndikatörleri
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA22'] = df['Close'].rolling(window=22).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
@@ -91,19 +90,14 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
             figratio=(12,8),
             returnfig=True
         )
-        fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')
+        fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')  # Kalite aynı
         img_io.seek(0)
         plt_img = Image.open(img_io)
-        # Belleği temizle
-        import matplotlib.pyplot as plt
-        plt.close(fig)
-        
+        plt.close(fig)   # Belleği temizle
     except Exception as e:
         return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
 
     guncel_kur = get_current_usd_try()
-
-    # Python üzerinden en son güncel kapanış fiyatını net olarak alalım
     guncel_fiyat_tl = float(df['Close'].iloc[-1])
     guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
 
