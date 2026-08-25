@@ -144,16 +144,16 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     except Exception as e:
         analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
 
-    img_io.seek(0)
-        base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
+   img_io.seek(0)
+    base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
 
-        result = {
-            "image": base64_img,
-            "rapor": analiz_metni
-        }
+    result = {
+        "image": base64_img,
+        "rapor": analiz_metni
+    }
 
     # Cache'e kaydet
-        with cache_lock:
-            chart_cache[hisse_kodu] = result
+    with cache_lock:
+        chart_cache[hisse_kodu] = result
 
-        return result
+    return result
