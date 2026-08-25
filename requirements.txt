@@ -6,3 +6,4 @@ matplotlib
 mplfinance
 pandas
 pillow
+cachetools
