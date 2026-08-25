@@ -13,7 +13,7 @@ import mplfinance as mpf
 import pandas as pd
 from cachetools import TTLCache
 import matplotlib
-matplotlib.use('Agg')          # Önemli
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # 12 saatlik cache
@@ -90,10 +90,10 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
             figratio=(12,8),
             returnfig=True
         )
-        fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')  # Kalite aynı
+        fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')
         img_io.seek(0)
         plt_img = Image.open(img_io)
-        plt.close(fig)   # Belleği temizle
+        plt.close(fig)
     except Exception as e:
         return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
 
@@ -101,7 +101,6 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     guncel_fiyat_tl = float(df['Close'].iloc[-1])
     guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
 
-    # Profesyonel Kıdemli Analist ve EDT Promptu
     sistem_istemi = rf"""
     Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
     Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir. 
@@ -144,7 +143,7 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     except Exception as e:
         analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
 
-   img_io.seek(0)
+    img_io.seek(0)
     base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
 
     result = {
