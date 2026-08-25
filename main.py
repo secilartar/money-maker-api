@@ -10,6 +10,13 @@ from PIL import Image
 import yfinance as yf
 import mplfinance as mpf
 import pandas as pd
+from cachetools import TTLCache
+import threading
+
+# 12 saat = 43200 saniye
+# maxsize=50 → aynı anda en fazla 50 hisse cache’lensin (bellek için)
+chart_cache = TTLCache(maxsize=50, ttl=43200)
+cache_lock = threading.Lock()
 
 app = FastAPI()
 
@@ -47,7 +54,10 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     hisse_kodu = hisse.upper()
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
-        
+    # --- CACHE KONTROLÜ ---
+    with cache_lock:
+        if hisse_kodu in chart_cache:
+            return chart_cache[hisse_kodu]    
     # 1. Yahoo Finance üzerinden haftalık verileri çekme
     df = yf.download(hisse_kodu, period="3y", interval="1wk", progress=False)
     if df.empty:
@@ -84,6 +94,10 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')
         img_io.seek(0)
         plt_img = Image.open(img_io)
+        # Belleği temizle
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+        
     except Exception as e:
         return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
 
@@ -143,3 +157,8 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         "image": base64_img,
         "rapor": analiz_metni
     }
+# --- CACHE’E KAYDET ---
+    with cache_lock:
+        chart_cache[hisse_kodu] = result
+
+    return result
