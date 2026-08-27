@@ -71,15 +71,17 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         hisse_kodu += ".IS"
 
     # 1. Hızlı Cache Kontrolü
-    if hisse_kodu in chart_cache:
-        return chart_cache[hisse_kodu]
-
-    # 2. Eşzamanlı İstek Engelleme (Hisseye özel kilit açılır)
-    lock = get_symbol_lock(hisse_kodu)
-    with lock:
-        # Kilit açılana kadar başka bir istek veriyi cache'e yazmış olabilir, tekrar kontrol et
+    with cache_lock:
         if hisse_kodu in chart_cache:
             return chart_cache[hisse_kodu]
+
+    # 2. Eşzamanlı İstek Engelleme (Hisseye özel kilit)
+    lock = get_symbol_lock(hisse_kodu)
+    with lock:
+        # Double-check
+        with cache_lock:
+            if hisse_kodu in chart_cache:
+                return chart_cache[hisse_kodu]
 
         # 3. Custom Session ile Veri Çekme
         try:
@@ -90,45 +92,46 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
 
         if df.empty:
             return {"image": None, "rapor": f"HATA: '{hisse_kodu}' için veri bulunamadı! Sembolü kontrol edin."}
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
 
-    df['MA5'] = df['Close'].rolling(window=5).mean()
-    df['MA22'] = df['Close'].rolling(window=22).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-    add_plots = [
-        mpf.make_addplot(df['MA5'], color='cyan', width=1),
-        mpf.make_addplot(df['MA22'], color='orange', width=1),
-        mpf.make_addplot(df['MA50'], color='green', width=1),
-    ]
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA22'] = df['Close'].rolling(window=22).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
 
-    img_io = io.BytesIO()
-    try:
-        fig, axes = mpf.plot(
-            df, 
-            type='candle', 
-            style='nightclouds', 
-            title=f"\n{hisse_kodu} Haftalik Teknik Grafik",
-            ylabel='Fiyat',
-            volume=True,
-            addplot=add_plots,
-            panel_ratios=(3,1),
-            figratio=(12,8),
-            returnfig=True
-        )
-        fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')
-        img_io.seek(0)
-        plt_img = Image.open(img_io)
-        plt.close(fig)
-    except Exception as e:
-        return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
+        add_plots = [
+            mpf.make_addplot(df['MA5'], color='cyan', width=1),
+            mpf.make_addplot(df['MA22'], color='orange', width=1),
+            mpf.make_addplot(df['MA50'], color='green', width=1),
+        ]
 
-    guncel_kur = get_current_usd_try()
-    guncel_fiyat_tl = float(df['Close'].iloc[-1])
-    guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
+        img_io = io.BytesIO()
+        try:
+            fig, axes = mpf.plot(
+                df, 
+                type='candle', 
+                style='nightclouds', 
+                title=f"\n{hisse_kodu} Haftalik Teknik Grafik",
+                ylabel='Fiyat',
+                volume=True,
+                addplot=add_plots,
+                panel_ratios=(3,1),
+                figratio=(12,8),
+                returnfig=True
+            )
+            fig.savefig(img_io, format='png', dpi=300, bbox_inches='tight')
+            img_io.seek(0)
+            plt_img = Image.open(img_io)
+            plt.close(fig)
+        except Exception as e:
+            return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
 
-    sistem_istemi = rf"""
+        guncel_kur = get_current_usd_try()
+        guncel_fiyat_tl = float(df['Close'].iloc[-1])
+        guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
+
+        sistem_istemi = rf"""
     Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
     Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir. 
     İncelediğin **{hisse_kodu}** hissesinin Python tarafından bizzat doğrulanan anlık güncel fiyatı: **{guncel_fiyat_tl:.2f} TL** (yaklaşık **${guncel_fiyat_usd:.2f} USD**) kadardır. Analizini ve fiyat hedeflerini MUTLAKA bu gerçek güncel fiyatı baz alarak yap.
@@ -161,25 +164,25 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     - **Tarihi Majör Direnç:** $X.XX USD (XXX TL) - Açıklama metni...
     """
 
-    try:
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=[sistem_istemi, plt_img]
-        )
-        analiz_metni = response.text
-    except Exception as e:
-        analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.6-flash',
+                contents=[sistem_istemi, plt_img]
+            )
+            analiz_metni = response.text
+        except Exception as e:
+            analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
 
-    img_io.seek(0)
-    base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
+        img_io.seek(0)
+        base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
 
-    result = {
-        "image": base64_img,
-        "rapor": analiz_metni
-    }
+        result = {
+            "image": base64_img,
+            "rapor": analiz_metni
+        }
 
-    # Cache'e kaydet
-    with cache_lock:
-        chart_cache[hisse_kodu] = result
+        # Cache'e kaydet (hâlâ kilit içindeyiz)
+        with cache_lock:
+            chart_cache[hisse_kodu] = result
 
-    return result
+        return result
