@@ -4,6 +4,9 @@ import base64
 import json
 import urllib.request
 import threading
+from collections import defaultdict
+from threading import Lock
+import requests
 from fastapi import FastAPI, Query, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google import genai
@@ -19,6 +22,20 @@ import matplotlib.pyplot as plt
 # 12 saatlik cache
 chart_cache = TTLCache(maxsize=50, ttl=43200)
 cache_lock = threading.Lock()
+
+# Hisse bazlı kilitler (thundering herd önleme)
+_symbol_locks = defaultdict(Lock)
+_locks_lock = Lock()   # _symbol_locks dict'ini korumak için
+
+def get_symbol_lock(symbol: str) -> Lock:
+    with _locks_lock:
+        return _symbol_locks[symbol]
+
+# Yahoo Finance için daha stabil session
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 
 app = FastAPI()
 
@@ -53,16 +70,26 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
 
-    # Cache kontrolü
-    with cache_lock:
+    # 1. Hızlı Cache Kontrolü
+    if hisse_kodu in chart_cache:
+        return chart_cache[hisse_kodu]
+
+    # 2. Eşzamanlı İstek Engelleme (Hisseye özel kilit açılır)
+    lock = get_symbol_lock(hisse_kodu)
+    with lock:
+        # Kilit açılana kadar başka bir istek veriyi cache'e yazmış olabilir, tekrar kontrol et
         if hisse_kodu in chart_cache:
             return chart_cache[hisse_kodu]
 
-    # Veri çekme
-    df = yf.download(hisse_kodu, period="3y", interval="1wk", progress=False)
-    if df.empty:
-        return {"image": None, "rapor": f"HATA: '{hisse_kodu}' için veri bulunamadı! Sembolü kontrol edin."}
+        # 3. Custom Session ile Veri Çekme
+        try:
+            ticker = yf.Ticker(hisse_kodu, session=yf_session)
+            df = ticker.history(period="3y", interval="1wk")
+        except Exception as e:
+            return {"image": None, "rapor": f"Veri çekme hatası (Yahoo Limit): {str(e)}"}
 
+        if df.empty:
+            return {"image": None, "rapor": f"HATA: '{hisse_kodu}' için veri bulunamadı! Sembolü kontrol edin."}
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
