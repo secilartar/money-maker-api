@@ -170,8 +170,10 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
                 contents=[sistem_istemi, plt_img]
             )
             analiz_metni = response.text
+            basarili_mi = True
         except Exception as e:
             analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
+            basarili_mi = False
 
         img_io.seek(0)
         base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode('utf-8')
@@ -181,8 +183,8 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
             "rapor": analiz_metni
         }
 
-        # Cache'e kaydet (hâlâ kilit içindeyiz)
-        with cache_lock:
-            chart_cache[hisse_kodu] = result
+        if basarili_mi:
+            with cache_lock:
+                chart_cache[hisse_kodu] = result
 
         return result
