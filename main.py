@@ -61,9 +61,10 @@ API_SECRET_KEY = os.environ.get("API_SECRET_KEY")
 client = genai.Client(api_key=API_KEY)
 
 GEMINI_MODELS = [
+    "gemini-3.8-flash",       # En yeni + en güçlü
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash-lite",  # Yoğunlukta hızlı kaçış rotası
 ]
 
 # Sadece bağımsız "nan" / "NaN" (Türkçe kelime içi eşleşme yok)
