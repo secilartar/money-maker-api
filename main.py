@@ -2,6 +2,7 @@ import os
 import io
 import base64
 import json
+import time
 import urllib.request
 import threading
 from collections import defaultdict
@@ -16,7 +17,7 @@ import mplfinance as mpf
 import pandas as pd
 from cachetools import TTLCache
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # 12 saatlik cache
@@ -27,9 +28,11 @@ cache_lock = threading.Lock()
 _symbol_locks = defaultdict(Lock)
 _locks_lock = Lock()
 
+
 def get_symbol_lock(symbol: str) -> Lock:
     with _locks_lock:
         return _symbol_locks[symbol]
+
 
 # Yahoo Finance için daha stabil session
 yf_session = requests.Session()
@@ -54,6 +57,12 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 API_SECRET_KEY = os.environ.get("API_SECRET_KEY")
 client = genai.Client(api_key=API_KEY)
 
+GEMINI_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+]
+
 
 def get_current_usd_try() -> float:
     try:
@@ -64,6 +73,40 @@ def get_current_usd_try() -> float:
             return float(data["rates"]["TRY"])
     except Exception:
         return 48.00
+
+
+def generate_with_retry(contents, max_attempts: int = 4):
+    """503 / 429 / high demand için exponential backoff + model fallback."""
+    last_err = None
+    for attempt in range(max_attempts):
+        model = GEMINI_MODELS[min(attempt, len(GEMINI_MODELS) - 1)]
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+            )
+            return response
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            retryable = any(
+                x in msg
+                for x in (
+                    "503",
+                    "unavailable",
+                    "429",
+                    "resource_exhausted",
+                    "high demand",
+                    "overloaded",
+                    "try again",
+                )
+            )
+            if retryable and attempt < max_attempts - 1:
+                wait = min(1.5 * (2 ** attempt), 20)
+                time.sleep(wait)
+                continue
+            raise
+    raise last_err
 
 
 @app.get("/analiz")
@@ -103,7 +146,6 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # OHLC temizliği
         for col in ("Open", "High", "Low", "Close"):
             if col not in df.columns:
                 return {
@@ -142,11 +184,17 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
                 figratio=(12, 8),
                 returnfig=True,
             )
-            fig.savefig(img_io, format="png", dpi=300, bbox_inches="tight")
+            # dpi 160: Render RAM dostu, analiz için yeterli
+            fig.savefig(img_io, format="png", dpi=160, bbox_inches="tight")
             img_io.seek(0)
-            plt_img = Image.open(img_io)
+            plt_img = Image.open(img_io).copy()
             plt.close(fig)
+            plt.close("all")
         except Exception as e:
+            try:
+                plt.close("all")
+            except Exception:
+                pass
             return {"image": None, "rapor": f"Grafik çizilirken hata oluştu: {str(e)}"}
 
         guncel_kur = get_current_usd_try()
@@ -193,7 +241,7 @@ Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat veris
                     [XXX TL / $Y USD] Dip
 
 4. Hacim uyumu ve hareketli ortalamaları (MA5, MA22, MA50) değerlendir; olasılık yüzdeleri ver.
-5. **ÖNEMLİ:** Karmaşık Markdown tabloları KULLANMA. Aşağıdaki formatı birebir takip et:
+5. **ÖNEMLİ:** Kesinlikle karmaşık Markdown tabloları KULLANMA. Aşağıdaki formatı birebir takip ederek temiz, alt alta maddeler halinde "SEVİYE VE HEDEF LİSTESİ" sun:
 
 - **Stop-Loss / Stop Seviyesi:** XXX.XX TL ($X.XX USD) - Açıklama...
 - **Kritik Destek (Ana Taban):** XXX.XX TL ($X.XX USD) - Açıklama...
@@ -206,16 +254,12 @@ Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat veris
 
         basarili_mi = False
         try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=[sistem_istemi, plt_img],
-            )
+            response = generate_with_retry([sistem_istemi, plt_img], max_attempts=4)
             analiz_metni = (response.text or "").strip()
             if not analiz_metni:
                 analiz_metni = "Yapay zeka boş yanıt döndü. Tekrar deneyin."
                 basarili_mi = False
             elif "nan" in analiz_metni.lower():
-                # nan sızdıysa cache'leme
                 analiz_metni = (
                     analiz_metni
                     + "\n\n[Sistem] Raporda geçersiz 'nan' ifadesi tespit edildi; "
