@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import base64
 import json
 import time
@@ -19,12 +20,15 @@ from cachetools import TTLCache
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import warnings
+
+warnings.filterwarnings("ignore", message=".*findfont.*")
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # 12 saatlik cache
 chart_cache = TTLCache(maxsize=50, ttl=43200)
 cache_lock = threading.Lock()
 
-# Hisse bazlı kilitler (thundering herd önleme)
 _symbol_locks = defaultdict(Lock)
 _locks_lock = Lock()
 
@@ -34,7 +38,6 @@ def get_symbol_lock(symbol: str) -> Lock:
         return _symbol_locks[symbol]
 
 
-# Yahoo Finance için daha stabil session
 yf_session = requests.Session()
 yf_session.headers.update({
     "User-Agent": (
@@ -63,6 +66,9 @@ GEMINI_MODELS = [
     "gemini-3.5-flash-lite",
 ]
 
+# Sadece bağımsız "nan" / "NaN" (Türkçe kelime içi eşleşme yok)
+NAN_RE = re.compile(r"(?<![a-zçğıöşüA-ZÇĞİÖŞÜ])nan(?![a-zçğıöşüA-ZÇĞİÖŞÜ])", re.IGNORECASE)
+
 
 def get_current_usd_try() -> float:
     try:
@@ -76,7 +82,6 @@ def get_current_usd_try() -> float:
 
 
 def generate_with_retry(contents, max_attempts: int = 4):
-    """503 / 429 / high demand için exponential backoff + model fallback."""
     last_err = None
     for attempt in range(max_attempts):
         model = GEMINI_MODELS[min(attempt, len(GEMINI_MODELS) - 1)]
@@ -102,8 +107,7 @@ def generate_with_retry(contents, max_attempts: int = 4):
                 )
             )
             if retryable and attempt < max_attempts - 1:
-                wait = min(1.5 * (2 ** attempt), 20)
-                time.sleep(wait)
+                time.sleep(min(1.5 * (2 ** attempt), 20))
                 continue
             raise
     raise last_err
@@ -118,19 +122,16 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
     if not hisse_kodu.endswith(".IS"):
         hisse_kodu += ".IS"
 
-    # 1. Hızlı cache
     with cache_lock:
         if hisse_kodu in chart_cache:
             return chart_cache[hisse_kodu]
 
-    # 2. Hisseye özel kilit
     lock = get_symbol_lock(hisse_kodu)
     with lock:
         with cache_lock:
             if hisse_kodu in chart_cache:
                 return chart_cache[hisse_kodu]
 
-        # 3. Veri çek
         try:
             ticker = yf.Ticker(hisse_kodu, session=yf_session)
             df = ticker.history(period="3y", interval="1wk")
@@ -165,9 +166,9 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         df["MA50"] = df["Close"].rolling(window=50).mean()
 
         add_plots = [
-            mpf.make_addplot(df["MA5"], color="cyan", width=1),
-            mpf.make_addplot(df["MA22"], color="orange", width=1),
-            mpf.make_addplot(df["MA50"], color="green", width=1),
+            mpf.make_addplot(df["MA5"], color="cyan", width=1.2),
+            mpf.make_addplot(df["MA22"], color="orange", width=1.2),
+            mpf.make_addplot(df["MA50"], color="lime", width=1.2),
         ]
 
         img_io = io.BytesIO()
@@ -181,13 +182,13 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
                 volume=True,
                 addplot=add_plots,
                 panel_ratios=(3, 1),
-                figratio=(12, 8),
+                figratio=(14, 8),
+                figscale=1.2,
                 returnfig=True,
             )
-            # dpi 160: Render RAM dostu, analiz için yeterli
-            fig.savefig(img_io, format="png", dpi=160, bbox_inches="tight")
+            fig.savefig(img_io, format="png", dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
             img_io.seek(0)
-            plt_img = Image.open(img_io).copy()
+            plt_img = Image.open(img_io).convert("RGB")
             plt.close(fig)
             plt.close("all")
         except Exception as e:
@@ -203,54 +204,48 @@ def analiz_et(hisse: str = Query("BRSAN"), x_api_key: str = Header(None)):
         if pd.isna(guncel_fiyat_tl) or guncel_fiyat_tl <= 0:
             return {
                 "image": None,
-                "rapor": f"HATA: '{hisse_kodu}' son kapanış geçersiz (nan/0).",
+                "rapor": f"HATA: '{hisse_kodu}' son kapanış geçersiz.",
             }
 
         guncel_fiyat_usd = guncel_fiyat_tl / guncel_kur
 
         sistem_istemi = rf"""
-Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
+    Sen kıdemli bir teknik analist ve algoritmik trade uzmanısın. Özel uzmanlık alanın Elliott Dalga Teorisi (EDT).
+    Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir. 
+    İncelediğin **{hisse_kodu}** hissesinin Python tarafından bizzat doğrulanan anlık güncel fiyatı: **{guncel_fiyat_tl:.2f} TL** (yaklaşık **${guncel_fiyat_usd:.2f} USD**) kadardır. Analizini ve fiyat hedeflerini MUTLAKA bu gerçek güncel fiyatı baz alarak yap.
+    === KRİTİK KURALLAR ===
+1. Grafik ekseni TÜRK LİRASI (TL). Sayıları ASLA USD sanma.
+2. Güncel fiyatı grafikten okuma; yalnızca {guncel_fiyat_tl:.2f} TL kullan.
+3. Seviyeler: XXX.XX TL ($Y.YY USD) — USD = TL / {guncel_kur:.2f}
+4. Asla "nan", "NaN", "undefined", "null" yazma.
+5. Mevcut fiyat satırında birebir: {guncel_fiyat_tl:.2f} TL (${guncel_fiyat_usd:.2f} USD)
+    Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat verisini birlikte değerlendirerek şu adımları harfiyen yerine getir:
 
-Piyasadaki anlık Dolar/TL kuru **1 USD = {guncel_kur:.2f} TL** seviyesindedir.
-İncelediğin **{hisse_kodu}** hissesinin Python tarafından doğrulanan GÜNCEL FİYATI:
-**{guncel_fiyat_tl:.2f} TL** (≈ **${guncel_fiyat_usd:.2f} USD**).
+    1. Grafikteki majör dalgaları (1-2-3-4-5) veya düzeltme dalgalarını (A-B-C) detaylıca tespit et.
+    2. Tespit ettiğin fiyat seviyelerini hem DOLAR (USD) hem de canlı kur ({guncel_kur:.2f} TL) üzerinden LİRA (TL) cinsinden parantez içinde belirt.
+    3. Grafikteki fiyatlara göre hem USD hem TL uyumlu ASCII dalga şemasını mutlaka çiz:
+    
+    [Fiyat USD / TL] Eski Zirve           [Fiyat USD / TL] Çift Tepe / Wave B Testi
+               /\                        /\
+              /  \                      /  \   <-- Düzeltme / Reddedilme (Wave C veya 4)
+             /    \                    /    \
+            /      \                  /      \       [Fiyat USD / TL] Olası Dip
+           /        \                /        \_____/
+    [Fiyat USD / TL] \              /
+                      \____________/
+                       [Fiyat USD / TL] Dip
 
-=== KRİTİK KURALLAR (ASLA İHLAL ETME) ===
-1. Grafikteki fiyat ekseni **TÜRK LİRASI (TL)** cinsindendir. Grafikte gördüğün sayıları ASLA dolar (USD) sanma.
-2. Güncel fiyatı grafikten OKUMA. Yukarıdaki Python fiyatını ({guncel_fiyat_tl:.2f} TL) tek doğru anlık fiyat kabul et.
-3. Grafikteki seviyeleri önce TL olarak oku; USD karşılığını SADECE şu formülle hesapla: USD = TL / {guncel_kur:.2f}
-4. Çıktıda "nan", "NaN", "undefined", "null" veya uydurma fiyat YAZMA.
-5. Mevcut fiyat maddesinde mutlaka şunu kullan: {guncel_fiyat_tl:.2f} TL (${guncel_fiyat_usd:.2f} USD)
+    4. Grafikteki mevcut durumu, hacim uyumunu ve hareketli ortalamaları (MA5, MA22, MA50) değerlendirerek ne zaman düzeltmeye/yükselişe geçeceğini olasılık yüzdeleri vererek her iki para birimi bazında açıkla.
+    5. **ÖNEMLİ:** Kesinlikle karmaşık Markdown tabloları KULLANMA. Aşağıdaki formatı birebir takip ederek temiz, alt alta maddeler halinde "SEVİYE VE HEDEF LİSTESİ" sun:
 
-Analizini ve fiyat hedeflerini MUTLAKA bu gerçek güncel fiyatı baz alarak yap.
-
-Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat verisini birlikte değerlendirerek şu adımları harfiyen yerine getir:
-
-1. Grafikteki majör dalgaları (1-2-3-4-5) veya düzeltme dalgalarını (A-B-C) detaylıca tespit et.
-2. Tespit ettiğin fiyat seviyelerini önce TL, yanında parantez içinde USD olarak yaz.
-   Format: XXX.XX TL ($Y.YY USD)
-3. Grafikteki fiyatlara göre TL/USD uyumlu ASCII dalga şemasını mutlaka çiz (eksendeki değerler TL'dir):
-
-[XXX TL / $Y USD] Eski Zirve           [XXX TL / $Y USD] Çift Tepe / Wave B
-           /\                                    /\
-          /  \                                  /  \   <-- Düzeltme (Wave C veya 4)
-         /    \                                /    \
-        /      \                              /      \_____ [XXX TL / $Y USD]
-[XXX TL] \                                    /
-          \__________________________________/
-                    [XXX TL / $Y USD] Dip
-
-4. Hacim uyumu ve hareketli ortalamaları (MA5, MA22, MA50) değerlendir; olasılık yüzdeleri ver.
-5. **ÖNEMLİ:** Kesinlikle karmaşık Markdown tabloları KULLANMA. Aşağıdaki formatı birebir takip ederek temiz, alt alta maddeler halinde "SEVİYE VE HEDEF LİSTESİ" sun:
-
-- **Stop-Loss / Stop Seviyesi:** XXX.XX TL ($X.XX USD) - Açıklama...
-- **Kritik Destek (Ana Taban):** XXX.XX TL ($X.XX USD) - Açıklama...
-- **Ara Destek (Tetiklenme):** XXX.XX TL ($X.XX USD) - Açıklama...
-- **Mevcut Fiyat:** {guncel_fiyat_tl:.2f} TL (${guncel_fiyat_usd:.2f} USD) - Anlık doğrulanmış fiyat
-- **İlk Ara Direnç:** XXX.XX TL ($X.XX USD) - Açıklama...
-- **Ana Hedef (Wave 5 Target):** XXX.XX TL ($X.XX USD) - Açıklama...
-- **Tarihi Majör Direnç:** XXX.XX TL ($X.XX USD) - Açıklama...
-"""
+    - **Stop-Loss / Stop Seviyesi:** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Kritik Destek (Ana Taban):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Ara Destek (Tetiklenme):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Mevcut Fiyat:** ${guncel_fiyat_usd:.2f} USD ({guncel_fiyat_tl:.2f} TL) - Anlık Grafik Fiyatı
+    - **İlk Ara Direnç:** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Ana Hedef (Wave 5 Target):** $X.XX USD (XXX TL) - Açıklama metni...
+    - **Tarihi Majör Direnç:** $X.XX USD (XXX TL) - Açıklama metni...
+    """
 
         basarili_mi = False
         try:
@@ -259,11 +254,11 @@ Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat veris
             if not analiz_metni:
                 analiz_metni = "Yapay zeka boş yanıt döndü. Tekrar deneyin."
                 basarili_mi = False
-            elif "nan" in analiz_metni.lower():
+            elif NAN_RE.search(analiz_metni):
+                # Gerçek NaN sızıntısı — cache'leme
                 analiz_metni = (
                     analiz_metni
-                    + "\n\n[Sistem] Raporda geçersiz 'nan' ifadesi tespit edildi; "
-                    "sonuç cache'lenmedi. Lütfen tekrar deneyin."
+                    + "\n\n[Sistem] Raporda geçersiz NaN tespit edildi; cache'lenmedi. Tekrar deneyin."
                 )
                 basarili_mi = False
             else:
@@ -272,8 +267,10 @@ Sana verdiğim teknik grafik görüntüsünü ve yukarıdaki gerçek fiyat veris
             analiz_metni = f"Yapay zeka analiz raporu oluşturulurken hata oluştu: {str(e)}"
             basarili_mi = False
 
-        img_io.seek(0)
-        base64_img = "data:image/png;base64," + base64.b64encode(img_io.read()).decode("utf-8")
+        # Görseli yeniden encode (RGB PNG)
+        out = io.BytesIO()
+        plt_img.save(out, format="PNG", optimize=True)
+        base64_img = "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("utf-8")
 
         result = {
             "image": base64_img,
